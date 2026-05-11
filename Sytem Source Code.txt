@@ -1,0 +1,132 @@
+#include <Wire.h> 
+#include <LiquidCrystal_I2C.h>
+
+LiquidCrystal_I2C lcd(0x27, 20, 4); 
+
+const int coinPin = 2;   
+const int stopButton = 3;   
+const int relayMotor = 7;  
+
+unsigned long remainingTime = 0; 
+unsigned long lastUpdate = 0;
+bool isPaused = false; 
+bool lastScreenWasIdle = true;
+
+// --- SUPER STABLE COIN FILTER ---
+int lastCoinReading = HIGH;
+int stableCoinState = HIGH;
+unsigned long lastCoinDebounce = 0;
+const int coinDebounceDelay = 30; // 30ms na steady LOW bago tanggapin
+unsigned long lastCoinTime = 0;
+const int coinGap = 500; // Gap sa pagitan ng bawat hulog (500ms)
+
+// --- BUTTON STABILITY ---
+int lastButtonState = HIGH;      
+int stableButtonState = HIGH;    
+unsigned long lastDebounceTime = 0;
+unsigned long debounceDelay = 80; 
+
+void setup() {
+  lcd.init();
+  lcd.backlight();
+  pinMode(coinPin, INPUT_PULLUP);
+  pinMode(stopButton, INPUT_PULLUP); 
+  pinMode(relayMotor, OUTPUT);
+  digitalWrite(relayMotor, HIGH); 
+  showIdleMessage();
+}
+
+void loop() {
+  unsigned long currentMillis = millis();
+
+ // 1. IMPROVED COIN DETECTION (Anti-Continuous)
+  int currentCoinReading = digitalRead(coinPin);
+
+  if (currentCoinReading != lastCoinReading) {
+    lastCoinDebounce = currentMillis;
+  }
+
+  if ((currentMillis - lastCoinDebounce) > coinDebounceDelay) {
+    if (currentCoinReading != stableCoinState) {
+      stableCoinState = currentCoinReading;
+
+      // Magdadagdag LANG kung ang confirmed state ay naging LOW
+      if (stableCoinState == LOW) {
+        if (currentMillis - lastCoinTime > coinGap) {
+          remainingTime += 239; // Dagdag 3:59
+          isPaused = false;     
+          lastCoinTime = currentMillis;
+          lcd.clear();
+        }
+      }
+    }
+  }
+  lastCoinReading = currentCoinReading;
+ // 2. STABLE BUTTON LOGIC
+  int currentButtonReading = digitalRead(stopButton);
+  if (currentButtonReading != lastButtonState) {
+    lastDebounceTime = currentMillis;
+  }
+  if ((currentMillis - lastDebounceTime) > debounceDelay) {
+    if (currentButtonReading != stableButtonState) {
+      stableButtonState = currentButtonReading;
+      if (stableButtonState == LOW && remainingTime > 0) {
+        isPaused = !isPaused;
+        lcd.clear();
+      }
+    }
+  }
+  lastButtonState = currentButtonReading;
+
+  // 3. TIMER AND MOTOR CONTROL
+  if (currentMillis - lastUpdate >= 1000) {
+    lastUpdate = currentMillis;
+    if (remainingTime > 0) {
+      if (!isPaused) {
+        remainingTime--;
+        digitalWrite(relayMotor, LOW); 
+        updateDisplay();
+        lastScreenWasIdle = false;
+      } else {
+        digitalWrite(relayMotor, HIGH); 
+        showPausedMessage();
+      }
+    } else {
+      digitalWrite(relayMotor, HIGH); 
+      isPaused = false;
+      if (!lastScreenWasIdle) {
+        lcd.clear();
+        showIdleMessage();
+        lastScreenWasIdle = true;
+      }
+    }
+  }
+}
+
+// --- DISPLAY FUNCTIONS ---
+void showIdleMessage() {
+  lcd.setCursor(0, 0); lcd.print("    VENDO WASH      ");
+  lcd.setCursor(0, 1); lcd.print("--------------------");
+  lcd.setCursor(0, 2); lcd.print(" INSERT 5 PESO COIN ");
+  lcd.setCursor(0, 3); lcd.print("   STATUS: READY    ");
+}
+
+void showPausedMessage() {
+  lcd.setCursor(0, 0); lcd.print("    VENDO WASH      ");
+  lcd.setCursor(0, 1); lcd.print("--------------------");
+  lcd.setCursor(0, 2); lcd.print("  * PAUSED *    ");
+  lcd.setCursor(0, 3); lcd.print(" PRESS TO RESUME    ");
+}
+
+void updateDisplay() {
+  int mins = remainingTime / 60;
+  int secs = remainingTime % 60;
+  lcd.setCursor(0, 0); lcd.print("  WASHING ACTIVE    ");
+  lcd.setCursor(0, 1); lcd.print("====================");
+  lcd.setCursor(0, 2); lcd.print(" TIME LEFT: ");
+  if (mins < 10) lcd.print("0"); lcd.print(mins);
+  lcd.print(":");
+  if (secs < 10) lcd.print("0"); lcd.print(secs);
+  lcd.print("    "); 
+  lcd.setCursor(0, 3); lcd.print(" STATUS: RUNNING... ");
+}
